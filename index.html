@@ -25,7 +25,7 @@
   button[data-k="#"], button[data-k="-"], button[data-k="n"] { font-size: 18px; line-height: 1; padding: 2px 9px; }
   button.on { background: #2563eb; border-color: #2563eb; color: #fff; }
   #tempo { width: 4em; }
-  #paper { width: 700px; max-width: calc(100% - 32px); box-sizing: content-box; margin: 20px auto; padding: 40px;
+  #paper { width: 1000px; max-width: calc(100% - 32px); box-sizing: content-box; margin: 20px auto; padding: 40px;
            background: #fff; box-shadow: 0 1px 6px #0003; overflow-x: auto; }
   #paper input { display: block; width: 100%; border: 0; outline: 0; background: none; font-family: Georgia, serif; color: #000; }
   #title { font-size: 28px; text-align: center; }
@@ -39,7 +39,7 @@
   @media print {
     body { background: #fff; display: block; }
     #sheets, .bar, .hint, .cursor { display: none; }
-    #paper { margin: 0 auto; padding: 12mm; max-width: none; box-shadow: none; overflow: visible; }
+    #paper { zoom: 0.7; margin: 0 auto; padding: 17mm; max-width: none; box-shadow: none; overflow: visible; }
     #paper input::placeholder { color: transparent; }
   }
 </style>
@@ -99,7 +99,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.5/build/cjs/vexflow.js"></script>
 <script>
-const VF = Vex.Flow, STORE = 'web_notes', W = 700, H = 150;
+const VF = Vex.Flow, STORE = 'web_notes', W = 1000, H = 150;
 const KEYS = { C: 0, G: 1, D: 2, A: 3, E: 4, B: 5, 'F#': 6, 'C#': 7, F: -1, Bb: -2, Eb: -3, Ab: -4, Db: -5, Gb: -6, Cb: -7 };
 const TIMES = ['2/4', '3/4', '4/4', '5/4', '2/2', '3/8', '6/8', '9/8', '12/8'];
 const UNITS = { w: 32, h: 16, q: 8, 8: 4, 16: 2 };           // in 32nd notes
@@ -203,6 +203,7 @@ function render() {
       voice.draw(ctx, stave);
       beams.forEach(b => b.setContext(ctx).draw());
     });
+    if (x < W - 1) new VF.Stave(x, 15, W - x).setBegBarType(VF.Barline.type.NONE).setContext(ctx).draw();   // empty staff to the right edge
     div.onclick = e => {
       const cx = e.clientX - div.getBoundingClientRect().left;
       let best = -1, bd = Infinity;
