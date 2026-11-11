@@ -706,25 +706,30 @@ async function pipe(bytes, through, max) {                     // max guards aga
 async function shareLink() {
   const json = new TextEncoder().encode(JSON.stringify(doc));
   let code;
-  try { code = 'z' + b64.enc(await pipe(json, new CompressionStream('deflate-raw'), 1e6)); } catch { code = 'j' + b64.enc(json); }
+  try { code = 'z' + b64.enc(await pipe(json, new CompressionStream('deflate-raw'), Infinity)); } catch { code = 'j' + b64.enc(json); }
+  if (json.length > 2e6 || code.length > 300001) return null;   // beyond what openShared accepts: never hand out a dead link
   return location.href.split('#')[0] + '#s=' + code;
 }
 async function share() {
   const link = shareLink(), btn = $('share');
   try {                                                        // the promise form keeps Safari's "must be inside the click" rule happy
-    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': link.then(u => new Blob([u], { type: 'text/plain' })) })]);
+    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': link.then(u => u ? new Blob([u], { type: 'text/plain' }) : Promise.reject()) })]);
     btn.textContent = 'Link copied ✓';
     setTimeout(() => btn.textContent = 'Share link', 2000);
-  } catch { prompt('Copy this link to share the sheet:', await link); }
+  } catch {
+    const url = await link;
+    if (url) prompt('Copy this link to share the sheet:', url);
+    else alert('This sheet is too large to share as a link. Use Save and send the file instead.');
+  }
 }
 // Opens a shared sheet as a new sheet of your own (or switches to it if you already have an identical one).
 async function openShared() {
-  const m = location.hash.match(/^#s=([zj])([\w-]{1,300000})$/);
+  const m = location.hash.match(/^#s=([zj][\w-]{1,300000})$/);
   if (!location.hash.startsWith('#s=')) return;
   history.replaceState(null, '', location.href.split('#')[0]);   // so a reload does not import it again
   try {
-    const bytes = b64.dec(m[2]);
-    const d = readSheets(new TextDecoder().decode(m[1] === 'z' ? await pipe(bytes, new DecompressionStream('deflate-raw'), 2e6) : bytes)).sheets[0];
+    const bytes = b64.dec(m[1].slice(1));
+    const d = readSheets(new TextDecoder().decode(m[1][0] === 'z' ? await pipe(bytes, new DecompressionStream('deflate-raw'), 2e6) : bytes)).sheets[0];
     if (!d) throw new Error('no sheet');
     const at = sheets.findIndex(x => JSON.stringify(x) === JSON.stringify(d));
     if (at < 0 && sheets.length === 1 && !dirty(sheets[0])) sheets = [d];   // first visit: don't leave an empty sheet beside it
