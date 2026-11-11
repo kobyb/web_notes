@@ -244,7 +244,8 @@ function measures(notes, time) {
   return ms;
 }
 
-// Note indices in playing order, following repeats and first/second endings. bs: [{ idx, rs, re, volta }]
+// Bar numbers in playing order, following repeats and first/second endings. bs: [{ rs, re, volta }]
+// ponytail: one level of repeats; a repeat nested inside another is not replayed by the outer one.
 function playOrder(bs) {
   const out = [];
   let start = 0, pass = 1;
@@ -252,7 +253,7 @@ function playOrder(bs) {
     const m = bs[i];
     if (m.rs && pass === 1) start = i;
     if (m.volta === 1 && pass === 2) { if (m.re) { pass = 1; start = i + 1; } i++; continue; }   // skip the first ending the second time
-    out.push(...m.idx);
+    out.push(i);
     if (m.re && pass === 1) { pass = 2; i = start; continue; }
     if (m.re) { pass = 1; start = i + 1; }
     i++;
@@ -584,7 +585,7 @@ function act(k) {
     if (!had) n[f] = v;
   }
   else if (k === 'Backspace' || k === 'Delete') {
-    if (many || !n.chord.length || n.rest) cut();
+    if (sel != null || !n.chord.length || n.rest) cut();
     else {                                                     // in a chord, delete only the pitch being edited
       const next = n.chord.sort((x, y) => Math.abs(x.step - n.step) - Math.abs(y.step - n.step)).shift();
       n.step = next.step; n.alter = next.alter;
@@ -599,25 +600,29 @@ function stop() {
 }
 function play() {
   if (ac) return stop();
-  const ns = doc.notes, seq = playOrder(bars);
+  // Played piece by piece, so a note tied over a barline sounds right when a repeat jumps into or out of it.
+  let g = 0;
+  const ns = doc.notes, all = bars.map(m => m.ps.map(p => ({ ...p, g: g++ }))), seq = playOrder(bars).flatMap(k => all[k]);
   if (!seq.length) return;
   ac = new AudioContext(); sel = null;
-  const t0 = ac.currentTime + 0.05, sec = secPer(doc.tempo);
-  const holds = k => seq[k + 1] === seq[k] + 1 && tiesTo(seq[k])                     // tied to the very next note, same pitches
-    && pitches(ns[seq[k]]).map(midi).join() === pitches(ns[seq[k + 1]]).map(midi).join();
+  const t0 = ac.currentTime + 0.05, sec = secPer(doc.tempo), mid = i => pitches(ns[i]).map(midi).join();
+  const holds = k => {                                         // piece k rings on into the piece played next
+    const p = seq[k], q = seq[k + 1];
+    return !!q && q.g === p.g + 1 && !ns[p.i].rest && (p.cont || q.first && tiesTo(p.i) && mid(p.i) === mid(q.i));
+  };
   let t = t0, held = false, vol = DYN.mf;
-  seq.forEach((i, k) => {
-    const n = ns[i];
-    if (n.dyn) vol = DYN[n.dyn];
-    timers.push(setTimeout(() => { cur = i; showCursor(); }, (t - t0) * 1000));
+  seq.forEach((p, k) => {
+    const n = ns[p.i];
+    if (p.first && n.dyn) vol = DYN[n.dyn];
+    timers.push(setTimeout(() => { cur = p.i; showCursor(); }, (t - t0) * 1000));
     if (!n.rest && !held) {
-      let len = units(n), j = k;
-      while (holds(j)) len += units(ns[seq[++j]]);
+      let len = units(p), j = k;
+      while (holds(j)) len += units(seq[++j]);
       if (n.art === 'staccato') len /= 2;
       pitches(n).forEach(q => tone(ac, midi(q), t, len * sec, vol * (n.art === 'accent' || n.art === 'marcato' ? 1.4 : 1)));
     }
     held = holds(k);
-    t += units(n) * sec * (n.art === 'fermata' ? 1.5 : 1);
+    t += units(p) * sec * (n.art === 'fermata' ? 1.5 : 1);
   });
   timers.push(setTimeout(stop, (t - t0) * 1000 + 100));
   showCursor();
@@ -755,8 +760,8 @@ NOTE_FIELDS.forEach(id => {
   console.assert(bar([{ dur: 'q' }, { dur: 'h', dot: true }, { dur: '8' }], '4/4') === 'q h. | 8'
     && bar([{ dur: 'w' }], '3/4') === 'h.~ | q' && bar([{ dur: 'h', dot: true }, { dur: 'h' }], '4/4') === 'h. q~ | q'
     && bar([{ dur: '8', trip: true }, { dur: '8', trip: true }, { dur: '8', trip: true }, { dur: 'q' }], '2/4') === '8 8 8 q', 'bars');
-  console.assert(playOrder([{ idx: [0], rs: true }, { idx: [1], volta: 1, re: true }, { idx: [2], volta: 2 }, { idx: [3], re: true }]).join() === '0,1,0,2,3,2,3'
-    && playOrder([{ idx: [0] }, { idx: [1], re: true }]).join() === '0,1,0,1', 'repeats');
+  console.assert(playOrder([{ rs: true }, { volta: 1, re: true }, { volta: 2 }, { re: true }]).join() === '0,1,0,2,3,2,3'
+    && playOrder([{}, { re: true }]).join() === '0,1,0,1', 'repeats');
   console.assert(same(shift(C4, 1), { step: 28, alter: 1 }) && same(shift(C4, 1, true), { step: 29, alter: -1 })
     && same(shift({ step: 34, alter: 0 }, 1), { step: 35, alter: 0 }) && same(shift(C4, -1), { step: 27, alter: 0 })
     && shift({ step: 49, alter: 0 }, 2) === null, 'transpose');
