@@ -142,6 +142,7 @@
     <button data-k="print" title="Print this sheet">Print</button>
     <button data-k="printall" title="Print every sheet, each starting on a new page">Print all</button>
     <button data-k="xml" title="Save this sheet as a MusicXML file, which MuseScore and similar apps can open">Export</button>
+    <button data-k="share" id="share" title="Copy a link that opens a copy of this sheet as it is now. Later changes are not in the link.">Share link</button>
   </div></div>
 </div>
 
@@ -563,6 +564,7 @@ function act(k) {
   if (k === ' ') return play();
   if (k === 'print') { endPrintAll(); return print(); }
   if (k === 'printall') return printAll();
+  if (k === 'share') return share();
   if (k === 'xml') return download((doc.title || 'untitled') + '.musicxml', toXML(), 'application/vnd.recordare.musicxml+xml');
   if (k === 'undo') {
     if (!hist.length) return;
@@ -686,6 +688,51 @@ function printAll() {
 // Plain Print and Ctrl/Cmd+P must only ever print the open sheet, even if a browser never reports the print-all job as finished.
 function endPrintAll() { document.body.classList.remove('all'); $('printall').textContent = ''; }
 addEventListener('afterprint', () => { endPrintAll(); relayout(fitWidth()); });
+
+// Share links carry the whole sheet in the address (#s=...), so they need no server: 'z' = deflated JSON, 'j' = plain JSON.
+const b64 = {
+  enc: bytes => { let s = ''; bytes.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); },
+  dec: s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)),
+};
+async function pipe(bytes, through, max) {                     // max guards against a link that inflates to something huge
+  const reader = new Blob([bytes]).stream().pipeThrough(through).getReader(), out = [];
+  for (let n = 0; ;) {
+    const { done, value } = await reader.read();
+    if (done) return new Uint8Array(await new Blob(out).arrayBuffer());
+    if ((n += value.length) > max) throw new Error('too large');
+    out.push(value);
+  }
+}
+async function shareLink() {
+  const json = new TextEncoder().encode(JSON.stringify(doc));
+  let code;
+  try { code = 'z' + b64.enc(await pipe(json, new CompressionStream('deflate-raw'), 1e6)); } catch { code = 'j' + b64.enc(json); }
+  return location.href.split('#')[0] + '#s=' + code;
+}
+async function share() {
+  const link = shareLink(), btn = $('share');
+  try {                                                        // the promise form keeps Safari's "must be inside the click" rule happy
+    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': link.then(u => new Blob([u], { type: 'text/plain' })) })]);
+    btn.textContent = 'Link copied ✓';
+    setTimeout(() => btn.textContent = 'Share link', 2000);
+  } catch { prompt('Copy this link to share the sheet:', await link); }
+}
+// Opens a shared sheet as a new sheet of your own (or switches to it if you already have an identical one).
+async function openShared() {
+  const m = location.hash.match(/^#s=([zj])([\w-]{1,300000})$/);
+  if (!location.hash.startsWith('#s=')) return;
+  history.replaceState(null, '', location.href.split('#')[0]);   // so a reload does not import it again
+  try {
+    const bytes = b64.dec(m[2]);
+    const d = readSheets(new TextDecoder().decode(m[1] === 'z' ? await pipe(bytes, new DecompressionStream('deflate-raw'), 2e6) : bytes)).sheets[0];
+    if (!d) throw new Error('no sheet');
+    const at = sheets.findIndex(x => JSON.stringify(x) === JSON.stringify(d));
+    if (at < 0 && sheets.length === 1 && !dirty(sheets[0])) sheets = [d];   // first visit: don't leave an empty sheet beside it
+    else if (at < 0) sheets.push(d);
+    openSheet(at < 0 ? sheets.length - 1 : at);
+  } catch { alert('This share link is damaged or incomplete, so the sheet could not be opened.'); }
+}
+addEventListener('hashchange', openShared);
 
 // MusicXML for the open sheet. ponytail: chord symbols and triplet brackets are not written; add <harmony>/<tuplet> if needed.
 function toXML() {
@@ -811,6 +858,6 @@ NOTE_FIELDS.forEach(id => {
   console.assert(4 * units({ dur: 'q' }) * secPer(120) === 2, 'timing');
 }
 
-W = fitWidth(); fill(); render();
+W = fitWidth(); fill(); render(); openShared();
 </script>
 </html>
