@@ -7,7 +7,9 @@
   body { margin: 0; display: flex; background: #e9e9ec; font: 14px system-ui, sans-serif; color: #222; }
   #sheets { flex: none; width: 170px; height: 100vh; position: sticky; top: 0; overflow-y: auto; box-sizing: border-box;
             padding: 8px; background: #f7f7f8; border-right: 1px solid #ccc; }
-  #add { width: 100%; margin-bottom: 8px; font-size: 18px; line-height: 1; }
+  #add { width: 100%; margin-bottom: 4px; font-size: 18px; line-height: 1; }
+  .io { display: flex; gap: 4px; margin-bottom: 8px; }
+  .io button { flex: 1; }
   .sheet { display: flex; margin-bottom: 2px; border-radius: 4px; }
   .sheet button { border: 0; background: none; }
   .sheet .name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -33,17 +35,22 @@
   .cursor { fill: #2563eb; opacity: .18; }
   .hint { color: #777; font-size: 12px; line-height: 1.7; margin-top: 24px; }
   kbd { border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; background: #f6f6f6; }
-  @page { margin: 12mm; }
+  @page { margin: 0; }   /* zero page margin leaves the browser no room for its own header/footer (date, URL) */
   @media print {
     body { background: #fff; display: block; }
     #sheets, .bar, .hint, .cursor { display: none; }
-    #paper { margin: 0 auto; padding: 0; box-shadow: none; overflow: visible; }
+    #paper { margin: 0 auto; padding: 12mm; max-width: none; box-shadow: none; overflow: visible; }
     #paper input::placeholder { color: transparent; }
   }
 </style>
 
 <nav id="sheets" aria-label="Sheets">
   <button id="add" title="New sheet">+</button>
+  <div class="io">
+    <button id="save" title="Save all sheets to a file">Save</button>
+    <button id="load" title="Load sheets from a saved file">Load</button>
+    <input id="file" type="file" accept=".json,application/json" hidden>
+  </div>
   <div id="list"></div>
 </nav>
 
@@ -99,16 +106,25 @@ const UNITS = { w: 32, h: 16, q: 8, 8: 4, 16: 2 };           // in 32nd notes
 const DUR_KEY = { 1: 'w', 2: 'h', 4: 'q', 8: '8', 6: '16' };
 const $ = id => document.getElementById(id);
 const FIELDS = ['title', 'composer', 'tempo', 'clef', 'key', 'time'];
+const MID = { treble: 34, bass: 22, alto: 28, tenor: 26 };    // step on the middle staff line: B4, D3, C4, A3
 const blank = () => ({ title: '', composer: '', tempo: 100, clef: 'treble', key: 'C', time: '4/4', notes: [] });
 
 // A note is { step, alter, dur, dot, rest, tie }. step = octave*7 + letter index (C=0), alter = -1/0/1 actual pitch.
+// Parses saved text (localStorage or a file) and keeps only what the app can draw, so bad data can't break rendering.
+function readSheets(text) {
+  const s = JSON.parse(text), has = Object.hasOwn, b = blank();
+  const list = (s?.sheets || (s?.notes ? [s] : []))             // s.notes: the old single-sheet format
+    .filter(d => d && Array.isArray(d.notes)).map(d => ({
+      title: String(d.title ?? ''), composer: String(d.composer ?? ''), tempo: Math.max(30, Math.min(300, +d.tempo || 100)),
+      clef: has(MID, d.clef) ? d.clef : b.clef, key: has(KEYS, d.key) ? d.key : b.key, time: TIMES.includes(d.time) ? d.time : b.time,
+      notes: d.notes
+        .filter(n => n && has(UNITS, n.dur) && Number.isInteger(n.step) && n.step >= 14 && n.step <= 49 && [-1, 0, 1].includes(n.alter))
+        .map(n => ({ step: n.step, alter: n.alter, dur: String(n.dur), dot: !!n.dot, rest: !!n.rest, tie: !!n.tie })),
+    }));
+  return { sheets: list, active: Math.max(0, Math.min(list.length - 1, s?.active | 0)) };
+}
 let sheets = [], active = 0;
-try {
-  const s = JSON.parse(localStorage.getItem(STORE));
-  sheets = (s?.sheets || (s?.notes ? [s] : []))               // s.notes: the old single-sheet format
-    .map(d => Object.assign(blank(), d)).filter(d => Array.isArray(d.notes));
-  active = Math.max(0, Math.min(sheets.length - 1, s?.active | 0));
-} catch {}
+try { ({ sheets, active } = readSheets(localStorage.getItem(STORE))); } catch {}
 if (!sheets.length) sheets = [blank()];
 let doc = sheets[active];
 let cur = doc.notes.length - 1, saved = JSON.stringify(doc), hist = [], pos = [], ac = null, timers = [];
@@ -117,7 +133,6 @@ const units = n => UNITS[n.dur] * (n.dot ? 1.5 : 1);
 const midi = n => 12 * (Math.floor(n.step / 7) + 1) + [0, 2, 4, 5, 7, 9, 11][n.step % 7] + n.alter;
 const keyAlter = (li, k = KEYS[doc.key]) =>
   k > 0 && 'FCGDAEB'.indexOf('CDEFGAB'[li]) < k ? 1 : k < 0 && 'BEADGCF'.indexOf('CDEFGAB'[li]) < -k ? -1 : 0;
-const MID = { treble: 34, bass: 22, alto: 28, tenor: 26 };    // step on the middle staff line: B4, D3, C4, A3
 const vfKey = n => 'cdefgab'[(n.rest ? MID[doc.clef] : n.step) % 7] + (n.rest ? '' : ['b', '', '#'][n.alter + 1])
   + '/' + Math.floor((n.rest ? MID[doc.clef] : n.step) / 7);
 const tiesTo = i => { const a = doc.notes[i], b = doc.notes[i + 1]; return a.tie && b && !a.rest && !b.rest; };
@@ -144,7 +159,7 @@ function render() {
     return s.getNoteStartX();
   };
   const ms = measures(doc.notes, doc.time).map(idx => ({
-    idx, w: idx.length ? 26 + idx.reduce((a, i) => a + (doc.notes[i].dur === '16' ? 30 : 38), 0) : 200,
+    idx, w: idx.length ? 26 + idx.reduce((a, i) => a + (doc.notes[i].dur === '16' ? 30 : 38), 0) : W,
   }));
   const lines = [];
   for (const m of ms) {
@@ -152,6 +167,8 @@ function render() {
     if (!l || l.used + m.w > W) lines.push(l = { ms: [], used: head(!lines.length), sum: 0 });
     l.ms.push(m); l.used += m.w; l.sum += m.w;
   }
+  const lastLi = lines.length - 1;
+  while (lines.length < 2) lines.push({ ms: [{ idx: [], w: W }], used: head(false) + W, sum: W });   // page always shows 2+ staff lines
   lines.forEach((l, li) => {
     const div = score.appendChild(document.createElement('div'));
     div.className = 'sys';
@@ -159,7 +176,7 @@ function render() {
     r.resize(W + 2, H);
     const ctx = r.getContext(), hd = l.used - l.sum;
     let scale = (W - hd) / l.sum;
-    if (li === lines.length - 1) scale = Math.min(scale, 1.3);   // don't stretch a short final line
+    if (li >= lastLi) scale = Math.min(scale, 1.3);   // don't stretch a short final line
     let x = 0;
     l.ms.forEach((m, k) => {
       const width = m.w * scale + (k ? 0 : hd), stave = new VF.Stave(x, 15, width);
@@ -168,7 +185,7 @@ function render() {
         stave.addClef(doc.clef).addKeySignature(doc.key);
         if (!li) stave.addTimeSignature(doc.time).setTempo({ duration: 'q', bpm: doc.tempo }, 0);
       }
-      if (m === ms.at(-1)) stave.setEndBarType(VF.Barline.type.END);
+      if (m === ms.at(-1) && m.idx.length) stave.setEndBarType(VF.Barline.type.END);
       stave.setContext(ctx).draw();
       if (!m.idx.length) return;
       const sn = m.idx.map(i => {
@@ -331,6 +348,13 @@ $('sheets').addEventListener('click', e => {
   const { open, del } = e.target.dataset;
   e.target.blur?.();
   if (e.target.id === 'add') { sheets.push(blank()); openSheet(sheets.length - 1); }
+  else if (e.target.id === 'load') $('file').click();
+  else if (e.target.id === 'save') {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ sheets, active }, null, 1)], { type: 'application/json' }));
+    a.download = 'web_notes.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
   else if (open) openSheet(+open);
   else if (del) {
     const d = sheets[del];
@@ -340,6 +364,16 @@ $('sheets').addEventListener('click', e => {
     openSheet(Math.min(sheets.length - 1, active - (del < active ? 1 : 0)));
   }
 });
+$('file').onchange = async e => {
+  const f = e.target.files[0];
+  e.target.value = '';                                          // so the same file can be loaded again
+  if (!f) return;
+  let got;
+  try { got = readSheets(await f.text()); } catch {}
+  if (!got?.sheets.length) return alert('That file has no Web Notes sheets in it.');
+  if (sheets.some(d => d.notes.length || d.title) && !confirm(`Replace all current sheets with the ${got.sheets.length} in "${f.name}"?`)) return;
+  sheets = got.sheets; openSheet(got.active);
+};
 for (const k in KEYS) $('key').add(new Option(k));
 for (const t of TIMES) $('time').add(new Option(t));
 FIELDS.forEach(id => {
