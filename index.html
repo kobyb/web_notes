@@ -10,6 +10,18 @@
   #add { width: 100%; margin-bottom: 4px; font-size: 18px; line-height: 1; }
   .io { display: flex; gap: 4px; margin-bottom: 8px; }
   .io button { flex: 1; }
+  #hear { width: 100%; margin-bottom: 8px; }
+  #imp { width: min(440px, 100% - 24px); box-sizing: border-box; padding: 20px; border: 1px solid #bbb; border-radius: 8px; }
+  #imp::backdrop { background: #0005; }
+  #imp h3 { margin: 0 0 6px; }
+  #imp h4 { margin: 16px 0 6px; font-size: 11px; color: #6b6b74; text-transform: uppercase; letter-spacing: .05em; }
+  #imp p { margin: 0 0 8px; color: #444; line-height: 1.45; }
+  #imp input:not([type=checkbox]) { font: inherit; padding: 4px 8px; border: 1px solid #bbb; border-radius: 4px; }
+  #imp .row { display: flex; gap: 6px; align-items: center; }
+  #yturl { flex: 1; min-width: 0; }
+  #impbpm { width: 5em; }
+  #ytbox iframe { display: block; width: 100%; aspect-ratio: 16 / 9; margin-top: 8px; border: 0; }
+  #impmsg { min-height: 1.45em; margin-top: 14px; font-weight: 600; color: #222; }
   .sheet { display: flex; margin-bottom: 2px; border-radius: 4px; }
   .sheet button { border: 0; background: none; }
   .sheet .name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -55,6 +67,7 @@
     #sheets { display: flex; gap: 4px; align-items: center; width: auto; height: auto; position: static; overflow-x: auto;
               border-right: 0; border-bottom: 1px solid #ccc; padding: 6px; }
     #add { width: auto; margin: 0; padding: 6px 12px; }
+    #hear { flex: none; width: auto; margin: 0; }
     .io, #list { display: flex; gap: 4px; margin: 0; }
     .sheet { flex: none; max-width: 10em; margin: 0; }
     .bar { flex-wrap: nowrap; overflow-x: auto; padding: 6px; }
@@ -88,8 +101,27 @@
     <button id="load" title="Load sheets from a saved file">Load</button>
     <input id="file" type="file" accept=".json,application/json" hidden>
   </div>
+  <button id="hear" title="Write a sheet from an audio file or a YouTube video">♪ From a recording</button>
   <div id="list"></div>
 </nav>
+
+<dialog id="imp" aria-labelledby="imph">
+  <h3 id="imph">Notes from a recording</h3>
+  <p>Web Notes listens to a recording and writes its tune on a new sheet. One voice or instrument comes out best;
+     a busy band with drums comes out rougher.</p>
+  <h4>From a file</h4>
+  <div class="row"><button id="impfile">Choose an audio or video file…</button><input id="impin" type="file" accept="audio/*,video/*" hidden></div>
+  <h4>From YouTube</h4>
+  <div class="row"><input id="yturl" placeholder="Paste a YouTube link" aria-label="YouTube link"><button id="ytgo"></button></div>
+  <div id="ytbox"></div>
+  <h4>Tempo</h4>
+  <div class="row"><input id="impbpm" type="number" min="30" max="300" placeholder="auto" aria-label="Tempo of the recording">
+    <span>beats per minute, if you know it</span></div>
+  <h4>Write down</h4>
+  <div class="row"><label><input id="impall" type="checkbox"> The chords and bass as well as the tune</label></div>
+  <p id="impmsg" role="status"></p>
+  <div class="row"><button id="impclose">Close</button></div>
+</dialog>
 
 <div class="col">
 <div class="bar">
@@ -779,8 +811,320 @@ function toXML() {
     + `<part-list><score-part id="P1"><part-name>Music</part-name></score-part></part-list>\n<part id="P1">\n${body}\n</part></score-partwise>\n`;
 }
 
+// ---- A recording to notes ----
+// hear() finds the notes with a small neural network that can follow several at once; if it cannot be loaded, melody() follows
+// one line by ear: every 20 ms the pitch whose harmonics hold the most energy wins. Either way toSheet() snaps the notes to a
+// grid of sixteenths. ponytail: no triplets, no pickup bar, always 4/4, one staff, first 5 minutes only.
+const CLEAR = 1.6;                                              // how far a pitch must stand out from the rest to count as a note
+const SR = 16000, HOP = 320, WIN = 2048, NFFT = 4096, LO = 36, PER = 4, CANDS = (95 - LO) * PER + 1, HARM = 8, MAX_SEC = 300;
+function fft(re, im) {                                          // in place, length a power of two
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2, xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+// Mono samples at SR -> the melody as [{ on, off, m }]: start and end in seconds, m a MIDI note number.
+async function melody(x, tick) {
+  const frames = Math.max(0, Math.floor((x.length - WIN) / HOP) + 1), f = new Float32Array(frames), amp = new Float32Array(frames);
+  const clear = new Float32Array(frames);                       // how far the best pitch stands out from the rest
+  const hann = Float32Array.from({ length: WIN }, (_, i) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / WIN));
+  const bins = Float32Array.from({ length: CANDS * HARM },      // FFT bin of each harmonic of each candidate pitch (quarter semitones)
+    (_, j) => (j % HARM + 1) * 440 * 2 ** ((LO + Math.floor(j / HARM) / PER - 69) / 12) * NFFT / SR);
+  const re = new Float32Array(NFFT), im = new Float32Array(NFFT), mag = new Float32Array(NFFT / 2 + 1), sal = new Float32Array(CANDS);
+  for (let t = 0; t < frames; t++) {
+    if (t % 250 === 0) await tick(t / frames);
+    const at = t * HOP;
+    let e = 0, best = 0, sum = 0;
+    re.fill(0); im.fill(0);
+    for (let i = 0; i < WIN; i++) re[i] = x[at + i] * hann[i];
+    for (let i = WIN / 2 - 256; i < WIN / 2 + 256; i++) e += x[at + i] ** 2;   // loudness over a short window, to catch re-struck notes
+    amp[t] = Math.sqrt(e / 512);
+    fft(re, im);
+    for (let k = 0; k <= NFFT / 2; k++) mag[k] = Math.sqrt(Math.hypot(re[k], im[k]));   // square root: quiet harmonics count too
+    for (let c = 0; c < CANDS; c++) {
+      let s = 0, w = 1;
+      for (let h = 0; h < HARM; h++, w *= 0.8) {
+        const b = bins[c * HARM + h], k = Math.floor(b);
+        if (k >= NFFT / 2) break;
+        s += w * (mag[k] + (mag[k + 1] - mag[k]) * (b - k));
+      }
+      sal[c] = s; sum += s;
+      if (s > sal[best]) best = c;
+    }
+    const l = sal[best - 1] ?? sal[best], r = sal[best + 1] ?? sal[best], bend = l - 2 * sal[best] + r;
+    f[t] = LO + (best + (bend ? (l - r) / 2 / bend : 0)) / PER;
+    clear[t] = sum ? sal[best] * CANDS / sum : 0;
+  }
+  const loud = Float32Array.from(amp).sort()[Math.floor(frames * 0.95)] || 0;
+  const voiced = t => amp[t] > loud * 0.01 && clear[t] > CLEAR;
+  let sx = 0, sy = 0;                                           // how far the recording is tuned from concert pitch
+  for (let t = 0; t < frames; t++) if (voiced(t)) { sx += Math.cos(2 * Math.PI * f[t]); sy += Math.sin(2 * Math.PI * f[t]); }
+  const off = Math.atan2(sy, sx) / 2 / Math.PI;
+  const raw = Array.from(f, (v, t) => voiced(t) ? Math.round(v - off) : 0);
+  const ns = raw.map((_, t) => raw.slice(Math.max(0, t - 2), t + 3).sort((a, b) => a - b)[Math.min(2, t)]);   // median of 5 drops blips
+  const evs = [], sec = HOP / SR;
+  for (let t = 1, from = 0, on = 0; t <= frames; t++) {         // from: where this pitch began; on: where the note got loud
+    if (t < frames && ns[t] === ns[from]) {
+      if (t - on < 4 || !(amp[t] > 1.6 * Math.min(amp[t - 1], amp[t - 2], amp[t - 3]))) continue;   // no fresh attack: same note
+      if (on === from && t - from <= 6) { on = t; continue; }   // a pitch shows just before its own attack: the note starts here
+    }
+    if (ns[from] && t - on >= 3) evs.push({ on: on * sec, off: t * sec, m: ns[from], amp: 1 });
+    if (t < frames && ns[t] !== ns[from]) from = t;             // the same pitch struck again keeps `from`, so only one attack is its own
+    on = t;
+  }
+  return evs;
+}
+
+// The listening model is Spotify's basic-pitch (Apache 2.0), run with TensorFlow.js. Both are fetched the first time they are
+// needed, about 2.5 MB. The windowing and note picking below follow the model's own reference code.
+const TF_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js';
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch@1.0.1/model/model.json';
+const BP = { sr: 22050, win: 43844, hop: 36164, pad: 3840, edge: 15, keep: 142 };   // it hears 2 s at a time; the 15 frames at each edge are dropped
+let model = null;
+function loadModel() {
+  return model ??= (async () => {
+    if (!window.tf) await new Promise((ok, no) => {
+      const el = document.createElement('script');
+      el.src = TF_URL; el.onload = ok; el.onerror = no; document.head.append(el);
+    });
+    return tf.loadGraphModel(MODEL_URL);
+  })().catch(e => { model = null; throw e; });                   // a failed download can be tried again next time
+}
+// Mono samples at 22050 Hz -> every note heard, as [{ on, off, m, amp }] in order of starting time.
+async function hear(x, tick) {
+  const net = await loadModel(), wins = Math.ceil(x.length / BP.hop), n = Math.min(wins * BP.keep, Math.floor(x.length * 86 / BP.sr));
+  const F = new Float32Array(n * 88), O = new Float32Array(n * 88), buf = new Float32Array(BP.win);   // per frame and piano key: sounding? struck?
+  for (let w = 0; w * BP.keep < n; w++) {
+    await tick(w / wins);
+    const from = w * BP.hop - BP.pad, rows = Math.min(BP.keep, n - w * BP.keep);
+    buf.fill(0);
+    buf.set(x.subarray(Math.max(0, from), Math.max(0, from + BP.win)), Math.max(0, -from));
+    const input = tf.tensor(buf, [1, BP.win, 1]), outs = net.execute(input, ['Identity_1', 'Identity_2']);
+    const [f, o] = await Promise.all(outs.map(t => t.data()));
+    tf.dispose([input, ...outs]);
+    F.set(f.subarray(BP.edge * 88, (BP.edge + rows) * 88), w * BP.keep * 88);
+    O.set(o.subarray(BP.edge * 88, (BP.edge + rows) * 88), w * BP.keep * 88);
+  }
+  const ON = 0.5, HOLD = 0.3, MIN = 6, GAP = 11, at = (t, c) => t * 88 + c;   // thresholds; shortest note and longest dropout, in frames
+  const time = t => (Math.floor(t / BP.keep) * BP.hop + t % BP.keep * 256) / BP.sr, notes = [];
+  const D = new Float32Array(n * 88), sure = O.slice();         // a sharp rise in a note's strength counts as a strike too
+  let oMax = 0, dMax = 0;
+  for (let i = 0; i < n * 88; i++) {
+    oMax = Math.max(oMax, O[i]);
+    if (i >= 176) dMax = Math.max(dMax, D[i] = Math.max(0, Math.min(F[i] - F[i - 88], F[i] - F[i - 176])));
+  }
+  if (dMax) for (let i = 0; i < n * 88; i++) O[i] = Math.max(O[i], D[i] * oMax / dMax);
+  const E = F.slice();                                          // strength not yet used up by a note
+  const wipe = (t, c) => { E[at(t, c)] = 0; if (c < 87) E[at(t, c + 1)] = 0; if (c) E[at(t, c - 1)] = 0; };
+  const add = (a, b, c) => {
+    let sum = 0;
+    for (let t = a; t < b; t++) sum += F[at(t, c)];
+    notes.push({ on: time(a), off: time(b), m: c + 21, amp: sum / (b - a) });
+  };
+  for (let t = n - 2; t > 0; t--) for (let c = 87; c >= 0; c--) {   // each strike, latest first, lasts until its key goes quiet
+    const v = O[at(t, c)];
+    if (v <= ON || v <= O[at(t - 1, c)] || v <= O[at(t + 1, c)]) continue;
+    if (sure[at(t, c)] < ON / 2 && F[at(t - 2, c)] > HOLD) continue;   // ...but not a swell in a note that is already sounding
+    let i = t + 1, k = 0;
+    while (i < n - 1 && k < GAP) { k = E[at(i, c)] < HOLD ? k + 1 : 0; i++; }
+    i -= k;
+    if (i - t <= MIN) continue;
+    for (let j = t; j < i; j++) wipe(j, c);
+    add(t, i, c);
+  }
+  const left = [];                                              // what still sounds without a strike (soft starts, slides): strongest first
+  for (let i = 0; i < n * 88; i++) if (E[i] > HOLD) left.push(i);
+  left.sort((a, b) => E[b] - E[a]);
+  for (const i0 of left) {
+    if (E[i0] <= HOLD) continue;
+    const c = i0 % 88, mid = (i0 - c) / 88;
+    E[i0] = 0;
+    let i = mid + 1, k = 0;
+    while (i < n - 1 && k < GAP) { k = E[at(i, c)] < HOLD ? k + 1 : 0; wipe(i, c); i++; }
+    const end = i - 1 - k;
+    for (i = mid - 1, k = 0; i > 0 && k < GAP; i--) { k = E[at(i, c)] < HOLD ? k + 1 : 0; wipe(i, c); }
+    if (end - (i + 1 + k) > MIN) add(i + 1 + k, end, c);
+  }
+  const echo = g => g.amp < 0.5 && notes.some(f => [12, 19, 24, 28, 31].includes(g.m - f.m)      // a faint note sitting on an overtone
+    && g.amp < f.amp * 0.75 && f.on < g.on + 0.05 && f.off > g.on);                               // of a stronger one is not a note
+  return notes.filter(e => e.m >= 36 && e.m <= 96 && !echo(e)).sort((a, b) => a.on - b.on);
+}
+// The tune is the top line: a note is dropped if a higher one (not much fainter) is already sounding, and so is anything far below the rest.
+function tune(evs) {
+  const top = evs.filter(e => !evs.some(o => o.m > e.m && o.amp > e.amp * 0.6 && o.on < e.on + 0.05 && o.off > e.on + Math.min(0.1, (e.off - e.on) / 2)));
+  const mid = top.map(e => e.m).sort((a, b) => a - b)[top.length >> 1];
+  return top.filter(e => e.m >= mid - 14);
+}
+
+// Notes in order of starting time -> a sheet on a grid of sixteenths. bpm 0 means work the tempo out from the gaps between notes.
+function toSheet(evs, bpm) {
+  const hits = [];                                              // notes struck together (within 50 ms) make one chord
+  for (const e of evs) {
+    const h = hits.at(-1);
+    if (h && e.on - h.on < 0.05) { h.ps.push(e); h.off = Math.max(h.off, e.off); }
+    else hits.push({ on: e.on, off: Math.max(h?.off ?? 0, e.off), ps: [e] });   // off: when everything struck so far has stopped
+  }
+  const gaps = hits.slice(1).map((h, i) => h.on - hits[i].on).filter(d => d < 2);
+  const miss = u => gaps.reduce((a, d) => {                     // how badly the gaps fit a grid; plain note values (1, 2, 4, 8 sixteenths) fit best
+    const n = Math.max(1, Math.round(d / u));
+    return a + Math.abs(d / u - n) + (n & n - 1 ? n % 3 ? 0.2 : 0.1 : 0);
+  }, 0) / gaps.length;
+  let u = 15 / (bpm || 100);                                    // seconds per sixteenth
+  if (!bpm && gaps.length > 3) {
+    let low = Infinity;                                         // the tempo whose grid the notes land on best; slower wins a tie
+    for (let b = 70; b < 140; b += 0.5) {                       // one octave of tempos: 60 and 120 fit the same notes equally well
+      const s = miss(15 / b) + b * 0.0002;
+      if (s < low) { low = s; u = 15 / b; }
+    }
+    const fit = gaps.map(d => [d, Math.round(d / u)]);          // least-squares touch-up, so a long tune does not drift off the grid
+    u = fit.reduce((a, [d, n]) => a + d * n, 0) / fit.reduce((a, [, n]) => a + n * n, 0) || u;
+    while (15 / u < 70) u /= 2;                                 // the touch-up can land just outside that octave
+    while (15 / u >= 140) u *= 2;
+  }
+  const slots = [];                                             // one per grid position that has notes: { at, off, ps }
+  for (const h of hits) {
+    const p = slots.at(-1);
+    let at = Math.round((h.on - hits[0].on) / u);
+    if (p && at <= p.at) {
+      if (h.on < p.off - 1e-6) { p.ps.push(...h.ps); p.off = h.off; continue; }   // sounding together: one chord
+      at = p.at + 1;                                            // one after the other: each keeps a place of its own
+    }
+    slots.push({ at, off: h.off, ps: h.ps });
+  }
+  const held = new Array(12).fill(0);                           // seconds spent on each pitch class
+  let all = 0, high = 0;
+  evs.forEach(e => { held[e.m % 12] += e.off - e.on; all += e.off - e.on; high += e.m * (e.off - e.on); });
+  let fifths = 0, top = -1;                                     // key signature holding most of the music; fewer accidentals wins a tie
+  for (let k = -5; k <= 6; k++) {
+    const s = [0, 2, 4, 5, 7, 9, 11].reduce((a, d) => a + held[(k * 7 + 60 + d) % 12], 0) - Math.abs(k) * all / 1000;
+    if (s > top) { top = s; fifths = k; }
+  }
+  const clef = high / all < 55 ? 'bass' : 'treble', notes = [];
+  const put = (len, ps) => {                                    // len in sixteenths; anything that is not one note value becomes tied notes
+    const qs = [...new Set(ps.sort((a, b) => b.amp - a.amp).map(e => e.m))].slice(0, 4)   // a chord keeps its four strongest notes
+      .sort((a, b) => b - a).map(m => shift({ step: 28, alter: 0 }, m - 60, fifths < 0)).filter(Boolean);
+    let left = len * 6;
+    for (const [un, dur, dot] of SPLIT) while (left >= un) {
+      left -= un;
+      notes.push({ ...mkNote(qs[0]?.step ?? MID[clef], qs[0]?.alter ?? 0), chord: qs.slice(1).map(q => ({ ...q })),
+                   dur, dot: !!dot, rest: !qs.length, tie: !!qs.length && left >= 6 });
+    }
+  };
+  slots.forEach((h, i) => {
+    const next = slots[i + 1]?.at ?? Infinity, end = Math.max(h.at + 1, Math.round((h.off - hits[0].on) / u));
+    let len = Math.min(end, next) - h.at, rest = next === Infinity ? 0 : next - h.at - len;
+    if (rest < 2 || rest <= len) { len += rest; rest = 0; }     // a note that merely dies away early still lasts until the next one
+    else if (len % 4 === 3) { len++; rest--; }                  // before a silence, a note a sixteenth short of the beat has just faded
+    if (next === Infinity && len % 4 === 3) len++;
+    put(len, h.ps); put(rest, []);
+  });
+  return { ...blank(), tempo: Math.max(30, Math.min(300, Math.round(15 / u))), clef, key: Object.keys(KEYS).find(k => KEYS[k] === fifths), notes };
+}
+
+let busy = false, rec = null;
+const say = s => $('impmsg').textContent = s;
+async function transcribe(blob, title) {
+  if (busy) return;
+  busy = true;
+  try {
+    say('Reading the recording…');
+    const raw = await blob.arrayBuffer();
+    const samples = async sr => {                               // mono, resampled to sr, first MAX_SEC seconds
+      const buf = await new OfflineAudioContext(1, 1, sr).decodeAudioData(raw.slice(0)), x = new Float32Array(Math.min(buf.length, MAX_SEC * sr));
+      for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < x.length; i++) x[i] += d[i] / buf.numberOfChannels; }
+      return x;
+    };
+    const tick = p => { say(`Listening for notes… ${Math.round(p * 100)}%`); return new Promise(r => setTimeout(r)); };
+    let x, evs;
+    try { x = await samples(BP.sr); }
+    catch { return say('That could not be read as sound. Try an MP3, WAV, M4A or MP4 file.'); }
+    try {
+      if (!model) say('Fetching the listening model (about 2.5 MB, first time only)…');
+      evs = await hear(x, tick);
+      if (!$('impall').checked) evs = tune(evs);
+    } catch { evs = await melody(await samples(SR), tick); }     // no model (offline, blocked, no graphics support): follow one line instead
+    if (!evs.length) return say('No clear notes could be heard in that recording.');
+    const d = toSheet(evs, Math.max(0, Math.min(300, +$('impbpm').value || 0)));
+    d.title = title.slice(0, 80);
+    if (sheets.length === 1 && !dirty(sheets[0])) sheets = [d]; else sheets.push(d);
+    openSheet(sheets.length - 1);
+    $('imp').close();
+    if (x.length >= MAX_SEC * BP.sr) alert(`Only the first ${MAX_SEC / 60} minutes were written down.`);
+  } finally { busy = false; }
+}
+$('impfile').onclick = () => busy || rec || $('impin').click();
+$('impin').onchange = e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (f) transcribe(f, f.name.replace(/\.[^.]+$/, ''));
+};
+
+// A page cannot download a YouTube video's sound itself. With YT_SERVER set, the small server in /server fetches it, which works
+// in every browser. Without it (or if it fails) the video plays here and the browser shares this tab's sound with the page,
+// which only Chrome and Edge on a computer can do.
+const YT_SERVER = '';                                           // e.g. 'https://notes-audio.example.com', no trailing slash
+let fetchIt = !!YT_SERVER;
+const ytLabel = () => $('ytgo').textContent = rec ? 'Stop and write notes' : fetchIt ? 'Write notes' : 'Listen';
+ytLabel();
+const ytId = s => s.match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/)?.[1];
+$('ytgo').onclick = async () => {
+  if (rec) return rec.stop();
+  if (busy) return;
+  const id = ytId($('yturl').value), cant = 'Listening to a video needs Chrome or Edge on a computer. Anywhere else, upload a recording instead.';
+  if (!id) return say('That does not look like a YouTube link.');
+  if (fetchIt) {
+    let r;
+    busy = true;
+    say('Fetching the sound of the video…');
+    try { r = await fetch(`${YT_SERVER}/audio?v=${id}`); } catch {} finally { busy = false; }
+    if (r?.ok) return transcribe(await r.blob(), decodeURIComponent(r.headers.get('X-Title') || '') || 'From YouTube');
+    const why = r && (await r.text()).slice(0, 200);
+    if (!navigator.mediaDevices?.getDisplayMedia) return say(why || 'The video could not be fetched. Try again in a moment.');
+    fetchIt = false; ytLabel();                                  // sharing must start from a click, so the next press listens instead
+    return say((why || 'The video could not be fetched.') + ' Press Listen to play it here and listen to it instead.');
+  }
+  if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) return say(cant);
+  let stream;
+  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, preferCurrentTab: true }); }
+  catch (e) { return say(e.name === 'NotAllowedError' ? 'Sharing was not allowed, so there was nothing to listen to.' : cant); }
+  const end = () => stream.getTracks().forEach(t => t.stop());
+  if (!stream.getAudioTracks().length) { end(); return say('No sound was shared. Share this tab with "Also share tab audio" switched on. ' + cant); }
+  const chunks = [], frame = document.createElement('iframe');
+  frame.src = `https://www.youtube-nocookie.com/embed/${id}?autoplay=1`;
+  frame.allow = 'autoplay; encrypted-media'; frame.title = 'YouTube video';
+  $('ytbox').replaceChildren(frame);
+  const r = rec = new MediaRecorder(new MediaStream(stream.getAudioTracks())), cap = setTimeout(() => r.stop(), MAX_SEC * 1000);
+  r.ondataavailable = e => chunks.push(e.data);
+  r.onstop = () => {
+    clearTimeout(cap); end(); rec = null;
+    $('ytbox').textContent = ''; ytLabel();
+    if ($('imp').open) transcribe(new Blob(chunks, { type: r.mimeType }), 'From YouTube');
+  };
+  stream.getTracks().forEach(t => t.onended = () => r.state === 'recording' && r.stop());   // "Stop sharing" in the browser's own bar
+  r.start(1000);
+  ytLabel();
+  say('Listening… let the video play, then press "Stop and write notes".');
+};
+$('impclose').onclick = () => $('imp').close();
+$('imp').onclose = () => rec?.stop();                             // closing mid-listen throws the recording away
+
 addEventListener('keydown', e => {
   const el = e.target;
+  if ($('imp').open) return;                                    // the dialog's own buttons and fields get the keys
   if (el.matches('input, select')) {
     if (e.key === 'Escape' || e.key === 'Enter' && (el.id !== 'lyric' || cur >= doc.notes.length - 1)) el.blur();
     else if (e.key === 'Enter') { cur++; sel = null; showCursor(); el.select(); }   // next syllable goes on the next note
@@ -805,6 +1149,7 @@ $('sheets').addEventListener('click', e => {
   e.target.blur?.();
   if (e.target.id === 'add') { sheets.push(blank()); openSheet(sheets.length - 1); }
   else if (e.target.id === 'load') $('file').click();
+  else if (e.target.id === 'hear') { $('impmsg').textContent = ''; $('imp').showModal(); }
   else if (e.target.id === 'save') download('web_notes.json', JSON.stringify({ sheets, active }, null, 1), 'application/json');
   else if (open) openSheet(+open);
   else if (del) {
@@ -856,6 +1201,8 @@ NOTE_FIELDS.forEach(id => {
     && same(shift({ step: 34, alter: 0 }, 1), { step: 35, alter: 0 }) && same(shift(C4, -1), { step: 27, alter: 0 })
     && shift({ step: 49, alter: 0 }, 2) === null, 'transpose');
   console.assert(4 * units({ dur: 'q' }) * secPer(120) === 2, 'timing');
+  const heard = toSheet([{ on: 1, off: 1.5, m: 66 }, { on: 1.5, off: 1.7, m: 62 }, { on: 2.5, off: 3.4, m: 57 }], 120);
+  console.assert(heard.notes.map(n => (n.rest ? 'r' : midi(n)) + n.dur).join() === '66q,628,rq,57h' && heard.key === 'G', 'recording');
 }
 
 W = fitWidth(); fill(); render(); openShared();
