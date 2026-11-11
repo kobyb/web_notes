@@ -28,22 +28,41 @@
   #lyric { width: 7em; }
   #sym { width: 5em; }
   #printall { display: none; }
-  .paper { width: 1000px; max-width: calc(100% - 32px); box-sizing: content-box; margin: 20px auto; padding: 40px;
+  .paper { width: min(1080px, 100% - 32px); box-sizing: border-box; margin: 20px auto; padding: 40px;
            background: #fff; box-shadow: 0 1px 6px #0003; overflow-x: auto; }
   .paper input { display: block; width: 100%; border: 0; outline: 0; background: none; font-family: Georgia, serif; color: #000; }
   .title { font-size: 28px; text-align: center; }
   .composer { font-size: 14px; text-align: right; margin-bottom: 10px; }
-  .sys { break-inside: avoid; cursor: pointer; }
-  .sys svg { display: block; }
+  .sys { break-inside: avoid; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sys svg { display: block; width: 100%; height: auto; }
   .cursor { fill: #2563eb; opacity: .18; }
   .cursor.head { opacity: .45; }
   .hint { color: #777; font-size: 12px; line-height: 1.7; margin-top: 24px; }
   kbd { border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; background: #f6f6f6; }
+  .pad { display: none; }
+  /* phones and tablets: sheets strip on top, one-row scrolling toolbar, note keys along the bottom */
+  @media screen and (max-width: 760px), screen and (pointer: coarse) {
+    body { display: block; }
+    #sheets { display: flex; gap: 4px; align-items: center; width: auto; height: auto; position: static; overflow-x: auto;
+              border-right: 0; border-bottom: 1px solid #ccc; padding: 6px; }
+    #add { width: auto; margin: 0; padding: 6px 12px; }
+    .io, #list { display: flex; gap: 4px; margin: 0; }
+    .sheet { flex: none; max-width: 10em; margin: 0; }
+    .bar { flex-wrap: nowrap; overflow-x: auto; padding: 6px; }
+    .bar > * { flex: none; }
+    .bar button, .bar select, .bar input, #sheets button { min-height: 36px; }
+    .paper { width: calc(100% - 12px); margin: 6px auto 84px; padding: 14px; }
+    .title { font-size: 22px; }
+    .hint { display: none; }
+    .pad { display: flex; gap: 4px; position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; padding: 6px;
+           background: #fff; border-top: 1px solid #ccc; }
+    .pad button { flex: 1; min-height: 48px; font-size: 20px; padding: 0; }
+  }
   @page { margin: 0; }   /* zero page margin leaves the browser no room for its own header/footer (date, URL) */
   @media print {
     body { background: #fff; display: block; }
-    #sheets, .bar, .hint, .cursor { display: none; }
-    .paper { zoom: 0.7; margin: 0 auto; padding: 17mm; max-width: none; box-shadow: none; overflow: visible; }
+    #sheets, .bar, .pad, .hint, .cursor { display: none; }
+    .paper { zoom: 0.7; width: 1000px; box-sizing: content-box; margin: 0 auto; padding: 17mm; box-shadow: none; overflow: visible; }
     .paper input::placeholder { color: transparent; }
     body.all #paper { display: none; }
     body.all #printall { display: block; }
@@ -126,11 +145,19 @@
   </p>
 </main>
 <div id="printall"></div>
+<div class="pad">
+  <button data-k="ArrowLeft" aria-label="Previous note">◀</button>
+  <button data-k="ArrowRight" aria-label="Next note">▶</button>
+  <button data-k="ArrowDown" aria-label="Pitch down">▼</button>
+  <button data-k="ArrowUp" aria-label="Pitch up">▲</button>
+  <button data-k="Enter" aria-label="Add note">＋</button>
+  <button data-k="Backspace" aria-label="Delete note">⌫</button>
+</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.5/build/cjs/vexflow.js"></script>
 <script>
-const VF = Vex.Flow, STORE = 'web_notes', W = 1000, H = 150, SVG = 'http://www.w3.org/2000/svg';
+const VF = Vex.Flow, STORE = 'web_notes', PAGE = 1000, H = 150, SVG = 'http://www.w3.org/2000/svg';
 const KEYS = { C: 0, G: 1, D: 2, A: 3, E: 4, B: 5, 'F#': 6, 'C#': 7, F: -1, Bb: -2, Eb: -3, Ab: -4, Db: -5, Gb: -6, Cb: -7 };
 const TIMES = ['2/4', '3/4', '4/4', '5/4', '2/2', '3/8', '6/8', '9/8', '12/8'];
 const UNITS = { w: 96, h: 48, q: 24, 8: 12, 16: 6, 32: 3 };  // in 96ths of a whole note, so triplets stay whole numbers
@@ -171,6 +198,7 @@ try { ({ sheets, active } = readSheets(localStorage.getItem(STORE))); } catch {}
 if (!sheets.length) sheets = [blank()];
 let doc = sheets[active];
 let cur = doc.notes.length - 1, sel = null, clip = '[]', saved = JSON.stringify(doc), hist = [];
+let W = PAGE;                                                  // layout width: the page on desktop and paper, narrower on phones
 let pos = [], hits = [], bars = [], ac = null, beep = null, timers = [];
 
 const units = n => UNITS[n.dur] * (n.dot ? 1.5 : 1) * (n.trip ? 2 / 3 : 1);
@@ -344,7 +372,7 @@ function render() {
       new VF.StaveTempo({ duration: 'q', bpm: doc.tempo }, stave0.getNoteStartX() - 10, Math.min(0, hi0 - 14 - base)).setContext(ctx).draw(stave0, 0);
     }
     div.onclick = e => {
-      const cx = e.clientX - div.getBoundingClientRect().left;
+      const box = div.getBoundingClientRect(), cx = (e.clientX - box.left) * (W + 2) / box.width;
       let best = -1, bd = Infinity;
       hits.forEach(h => {
         const d = Math.abs(h.note.getAbsoluteX() - cx);
@@ -375,7 +403,9 @@ function render() {
     for (let a = i; a < j;) {
       let b = a;
       while (b < j && pos[b + 1].first.div === pos[a].first.div) b++;
-      if (b > a) new VF.Curve(pos[a].first.note, pos[b].first.note, {}).setContext(pos[a].first.ctx).draw();
+      // a lone note on its line still gets a stub: undefined makes the curve run to the edge of that bar
+      const from = b > a || a === i ? pos[a].first.note : undefined, to = b > a || a > i ? pos[b].first.note : undefined;
+      new VF.Curve(from, to, {}).setContext(pos[a].first.ctx).draw();
       a = b + 1;
     }
     i = j - 1;
@@ -384,7 +414,7 @@ function render() {
     const bb = svg.getBBox(), top = Math.min(0, Math.floor(bb.y - 6)), bottom = Math.max(H, Math.ceil(bb.y + bb.height + 6));
     svg.setAttribute('viewBox', `0 ${top} ${W + 2} ${bottom - top}`);
     svg.setAttribute('height', bottom - top);
-    svg.style.height = bottom - top + 'px';
+    svg.removeAttribute('style');                              // CSS scales the line to the page width
   });
   showCursor();
 }
@@ -419,6 +449,14 @@ function showCursor() {
   $('play').textContent = ac ? '■ Stop' : '▶ Play';
 }
 
+// Narrow screens get fewer bars per line (down to 500 wide, then the line is scaled to fit) so notes stay readable.
+function fitWidth() {
+  const cs = getComputedStyle($('paper'));
+  return Math.max(500, Math.min(PAGE, Math.floor($('paper').clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight))));
+}
+function relayout(w) { if (w !== W) { W = w; render(); } }
+addEventListener('resize', () => relayout(fitWidth()));
+addEventListener('beforeprint', () => relayout(PAGE));        // paper always gets the full-width layout
 function fill() { FIELDS.forEach(id => $(id).value = doc[id]); }
 function store() { sheets[active] = doc; try { localStorage.setItem(STORE, JSON.stringify({ sheets, active })); } catch {} }
 // ponytail: undo history is per visit to a sheet; switching sheets clears it.
@@ -470,7 +508,13 @@ function act(k) {
     return [base - 7, base, base + 7].filter(s => s >= 14 && s <= 49 && (!free || !pitches(n).some(q => q.step === s)))
       .sort((x, y) => Math.abs(x - n.step) - Math.abs(y - n.step))[0];
   };
-  const cut = () => { ns.splice(a, b - a + 1); cur = Math.max(a - 1, ns.length ? 0 : -1); sel = null; };
+  const cut = () => {
+    for (let i = a; i <= b; i++) {                             // a bar keeps its repeat/ending marks if any of its notes survive
+      const keep = ns[barOf(i)?.idx.find(j => j < a || j > b)], x = ns[i];
+      if (keep) { keep.rs ||= x.rs; keep.re ||= x.re; keep.volta ||= x.volta; }
+    }
+    ns.splice(a, b - a + 1); cur = Math.max(a - 1, ns.length ? 0 : -1); sel = null;
+  };
   if (k === ' ') return play();
   if (k === 'print') { endPrintAll(); return print(); }
   if (k === 'printall') return printAll();
@@ -481,7 +525,7 @@ function act(k) {
     cur = Math.max(Math.min(cur, doc.notes.length - 1), doc.notes.length ? 0 : -1); sel = null; fill(); return render();
   }
   if (k === 'paste') {
-    const add = JSON.parse(clip);
+    const add = JSON.parse(clip).map(x => ({ ...x, rs: false, re: false, volta: 0 }));   // bar marks are not copied
     if (!add.length) return;
     ns.splice(cur + 1, 0, ...add); cur += add.length; sel = null;
     return commit();
@@ -582,6 +626,7 @@ function play() {
 // Every sheet is engraved in turn and copied into #printall, which replaces the page for this one print job.
 function printAll() {
   const keepCur = cur;
+  W = PAGE;
   $('printall').replaceChildren(...sheets.map(d => {
     doc = d; fill(); render();
     const c = $('paper').cloneNode(true);
@@ -595,7 +640,7 @@ function printAll() {
 }
 // Plain Print and Ctrl/Cmd+P must only ever print the open sheet, even if a browser never reports the print-all job as finished.
 function endPrintAll() { document.body.classList.remove('all'); $('printall').textContent = ''; }
-addEventListener('afterprint', endPrintAll);
+addEventListener('afterprint', () => { endPrintAll(); relayout(fitWidth()); });
 
 // MusicXML for the open sheet. ponytail: chord symbols and triplet brackets are not written; add <harmony>/<tuplet> if needed.
 function toXML() {
@@ -659,7 +704,7 @@ addEventListener('keydown', e => {
     : /^(Enter|Arrow.*|Home|End|Backspace|Delete|[a-h1-468.rtnsl#+=\- \[\]])$/.test(key) ? key : null;
   if (k) { e.preventDefault(); act(k); }
 });
-document.querySelector('.bar').addEventListener('click', e => {
+document.addEventListener('click', e => {
   const b = e.target.closest('[data-k]');
   if (b) { b.blur(); act(b.dataset.k); }
 });
@@ -718,6 +763,6 @@ NOTE_FIELDS.forEach(id => {
   console.assert(4 * units({ dur: 'q' }) * secPer(120) === 2, 'timing');
 }
 
-fill(); render();
+W = fitWidth(); fill(); render();
 </script>
 </html>
