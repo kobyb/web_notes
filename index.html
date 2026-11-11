@@ -107,6 +107,7 @@ const DUR_KEY = { 1: 'w', 2: 'h', 4: 'q', 8: '8', 6: '16' };
 const $ = id => document.getElementById(id);
 const FIELDS = ['title', 'composer', 'tempo', 'clef', 'key', 'time'];
 const MID = { treble: 34, bass: 22, alto: 28, tenor: 26 };    // step on the middle staff line: B4, D3, C4, A3
+const dirty = d => JSON.stringify(d) !== JSON.stringify(blank());   // has anything worth a confirmation
 const blank = () => ({ title: '', composer: '', tempo: 100, clef: 'treble', key: 'C', time: '4/4', notes: [] });
 
 // A note is { step, alter, dur, dot, rest, tie }. step = octave*7 + letter index (C=0), alter = -1/0/1 actual pitch.
@@ -359,7 +360,7 @@ $('sheets').addEventListener('click', e => {
   else if (open) openSheet(+open);
   else if (del) {
     const d = sheets[del];
-    if ((d.notes.length || d.title) && !confirm(`Delete "${d.title || 'Untitled'}"? This cannot be undone.`)) return;
+    if (dirty(d) && !confirm(`Delete "${d.title || 'Untitled'}"? This cannot be undone.`)) return;
     sheets.splice(del, 1);
     if (!sheets.length) sheets.push(blank());
     openSheet(Math.min(sheets.length - 1, active - (del < active ? 1 : 0)));
@@ -372,7 +373,7 @@ $('file').onchange = async e => {
   let got;
   try { got = readSheets(await f.text()); } catch {}
   if (!got?.sheets.length) return alert('That file has no Web Notes sheets in it.');
-  if (sheets.some(d => d.notes.length || d.title) && !confirm(`Replace all current sheets with the ${got.sheets.length} in "${f.name}"?`)) return;
+  if (sheets.some(dirty) && !confirm(`Replace all current sheets with the ${got.sheets.length} in "${f.name}"?`)) return;
   sheets = got.sheets; openSheet(got.active);
 };
 for (const k in KEYS) $('key').add(new Option(k));
