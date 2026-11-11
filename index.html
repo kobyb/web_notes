@@ -17,16 +17,20 @@
   .sheet:hover { background: #e4e4e8; }
   .sheet.on { background: #dbe6fd; font-weight: 600; }
   .col { flex: 1; min-width: 0; }
-  .bar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+  .bar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: flex-start;
          padding: 8px 12px; background: #fff; border-bottom: 1px solid #ccc; }
-  .bar span { display: flex; gap: 2px; }
+  .grp { display: flex; flex-direction: column; gap: 3px; padding-right: 14px; border-right: 1px solid #e3e3e6; }
+  .grp:last-child { border-right: 0; }
+  .grp small { font-size: 11px; color: #6b6b74; text-transform: uppercase; letter-spacing: .05em; }
+  .grp > div { display: flex; gap: 3px; align-items: center; min-height: 31px; }
+  .grp label { display: flex; gap: 4px; align-items: center; margin-right: 6px; color: #555; }
   button, select, .bar input { font: inherit; padding: 4px 8px; border: 1px solid #bbb; border-radius: 4px; background: #fff; }
   button { cursor: pointer; }
-  button[data-k="#"], button[data-k="-"], button[data-k="n"] { font-size: 18px; line-height: 1; padding: 2px 9px; }
+  button.acc { font-size: 18px; line-height: 1; padding: 2px 9px; }
   button.on { background: #2563eb; border-color: #2563eb; color: #fff; }
   #tempo { width: 4em; }
   #lyric { width: 7em; }
-  #sym { width: 5em; }
+  #sym { width: 9em; }
   #printall { display: none; }
   .paper { width: min(1080px, 100% - 32px); box-sizing: border-box; margin: 20px auto; padding: 40px;
            background: #fff; box-shadow: 0 1px 6px #0003; overflow-x: auto; }
@@ -37,8 +41,13 @@
   .sys svg { display: block; width: 100%; height: auto; }
   .cursor { fill: #2563eb; opacity: .18; }
   .cursor.head { opacity: .45; }
-  .hint { color: #777; font-size: 12px; line-height: 1.7; margin-top: 24px; }
-  kbd { border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; background: #f6f6f6; }
+  .hint { margin-top: 28px; padding-top: 12px; border-top: 1px solid #e3e3e6; color: #444; font-size: 13px; }
+  .hint summary { cursor: pointer; font-weight: 600; color: #333; }
+  .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 4px 28px; margin-top: 10px; }
+  .keys h4 { margin: 8px 0 4px; font-size: 11px; color: #6b6b74; text-transform: uppercase; letter-spacing: .05em; }
+  .keys p { margin: 0; line-height: 2; }
+  kbd { display: inline-block; min-width: 1.2em; text-align: center; border: 1px solid #c4c4cc; border-bottom-width: 2px; border-radius: 4px;
+        padding: 0 5px; background: #f6f6f8; font: 12px ui-monospace, monospace; line-height: 1.5; color: #222; }
   .pad { display: none; }
   /* phones and tablets: sheets strip on top, one-row scrolling toolbar, note keys along the bottom */
   @media screen and (max-width: 760px), screen and (pointer: coarse) {
@@ -50,6 +59,8 @@
     .sheet { flex: none; max-width: 10em; margin: 0; }
     .bar { flex-wrap: nowrap; overflow-x: auto; padding: 6px; }
     .bar > * { flex: none; }
+    .grp small { display: none; }
+    .grp { padding-right: 8px; }
     .bar button, .bar select, .bar input, #sheets button { min-height: 36px; }
     .paper { width: calc(100% - 12px); margin: 6px auto 84px; padding: 14px; }
     .title { font-size: 22px; }
@@ -82,67 +93,101 @@
 
 <div class="col">
 <div class="bar">
-  <span>
-    <button data-k="1" title="Whole note (1)">Whole</button>
-    <button data-k="2" title="Half note (2)">Half</button>
-    <button data-k="4" title="Quarter note (4)">Quarter</button>
-    <button data-k="8" title="Eighth note (8)">8th</button>
-    <button data-k="6" title="Sixteenth note (6)">16th</button>
-  </span>
-  <span>
-    <button data-k="." title="Dotted (.)">Dot</button>
-    <button data-k="3" title="Triplet (3)">Triplet</button>
-    <button data-k="r" title="Rest (R)">Rest</button>
-    <button data-k="t" title="Tie to next note (T)">Tie</button>
-    <button data-k="s" title="Slur to next note (S)">Slur</button>
-  </span>
-  <span>
-    <button data-k="#" title="Sharp (# or +)">♯</button>
-    <button data-k="-" title="Flat (-)">♭</button>
-    <button data-k="n" title="Natural (N)">♮</button>
-  </span>
-  <label>Dynamic <select id="dyn" title="Dynamic from this note on"></select></label>
-  <label>Mark <select id="art" title="Articulation on this note"></select></label>
-  <label>Lyric <input id="lyric" maxlength="40" title="Lyric under this note (L). Enter moves to the next note."></label>
-  <label>Chord <input id="sym" maxlength="20" title="Chord symbol above this note (H)"></label>
-  <span>
-    <button data-k="rs" title="Repeat starts at this bar">|:</button>
-    <button data-k="re" title="Repeat ends at this bar">:|</button>
-    <button data-k="v1" title="This bar is the first ending">1.</button>
-    <button data-k="v2" title="This bar is the second ending">2.</button>
-  </span>
-  <span>
-    <button data-k="[" title="Transpose down a semitone ([): the selection, or the whole sheet">Transpose ▼</button>
-    <button data-k="]" title="Transpose up a semitone (]): the selection, or the whole sheet">▲</button>
-  </span>
-  <label>Clef <select id="clef"><option>treble<option>bass<option value="alto">alto (C)<option value="tenor">tenor (C)</select></label>
-  <label>Key <select id="key"></select></label>
-  <label>Time <select id="time"></select></label>
-  <label>Tempo <input id="tempo" type="number" min="30" max="300"></label>
-  <span>
+  <div class="grp"><small>Note length</small><div>
+    <button data-k="1" title="Whole note (key 1)">Whole</button>
+    <button data-k="2" title="Half note (key 2)">Half</button>
+    <button data-k="4" title="Quarter note (key 4)">Quarter</button>
+    <button data-k="8" title="Eighth note (key 8)">8th</button>
+    <button data-k="6" title="Sixteenth note (key 6)">16th</button>
+    <button data-k="." title="Dotted: half as long again (key .)">Dotted</button>
+    <button data-k="3" title="Triplet: three notes in the time of two (key 3)">Triplet</button>
+  </div></div>
+  <div class="grp"><small>Note</small><div>
+    <button data-k="r" title="Turn this note into a rest (key R)">Rest</button>
+    <button data-k="#" class="acc" title="Sharp (key # or +)">♯</button>
+    <button data-k="-" class="acc" title="Flat (key -)">♭</button>
+    <button data-k="n" class="acc" title="Natural (key N)">♮</button>
+    <button data-k="t" title="Tie to the next note (key T)">Tie</button>
+    <button data-k="s" title="Slur to the next note (key S)">Slur</button>
+  </div></div>
+  <div class="grp"><small>Expression</small><div>
+    <select id="dyn" title="Loudness from this note on" aria-label="Dynamic"></select>
+    <select id="art" title="Articulation on this note" aria-label="Articulation"></select>
+  </div></div>
+  <div class="grp"><small>Words</small><div>
+    <input id="lyric" maxlength="40" placeholder="Lyric" aria-label="Lyric" title="Lyric under this note (key L). Enter moves to the next note.">
+    <input id="sym" maxlength="20" placeholder="Chord, e.g. Am7" aria-label="Chord symbol" title="Chord symbol above this note (key H)">
+  </div></div>
+  <div class="grp"><small>This bar</small><div>
+    <button data-k="rs" title="A repeated section starts at this bar">Repeat from</button>
+    <button data-k="re" title="A repeated section ends at this bar">Repeat to</button>
+    <button data-k="v1" title="Play this bar the first time only">1st ending</button>
+    <button data-k="v2" title="Play this bar the second time only">2nd ending</button>
+  </div></div>
+  <div class="grp"><small>Sheet</small><div>
+    <label>Clef <select id="clef"><option value="treble">Treble<option value="bass">Bass<option value="alto">Alto (C)<option value="tenor">Tenor (C)</select></label>
+    <label>Key <select id="key"></select></label>
+    <label>Time <select id="time"></select></label>
+    <label>Tempo <input id="tempo" type="number" min="30" max="300" title="Quarter notes per minute"></label>
+  </div></div>
+  <div class="grp"><small>Transpose</small><div>
+    <button data-k="[" title="Down a semitone: the selected notes, or the whole sheet (key [)">▼ Down</button>
+    <button data-k="]" title="Up a semitone: the selected notes, or the whole sheet (key ])">▲ Up</button>
+  </div></div>
+  <div class="grp"><small>Play &amp; edit</small><div>
     <button data-k=" " id="play" title="Play / stop (Space)">▶ Play</button>
-    <button data-k="undo" title="Undo (Ctrl/Cmd+Z)">Undo</button>
-  </span>
-  <span>
+    <button data-k="undo" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
+  </div></div>
+  <div class="grp"><small>Output</small><div>
     <button data-k="print" title="Print this sheet">Print</button>
     <button data-k="printall" title="Print every sheet, each starting on a new page">Print all</button>
-    <button data-k="xml" title="Export this sheet as MusicXML (opens in MuseScore and similar)">Export</button>
-  </span>
+    <button data-k="xml" title="Save this sheet as a MusicXML file, which MuseScore and similar apps can open">Export</button>
+  </div></div>
 </div>
 
 <main id="paper" class="paper">
   <input id="title" class="title" placeholder="Title" aria-label="Title">
   <input id="composer" class="composer" placeholder="Composer" aria-label="Composer">
   <div id="score"></div>
-  <p class="hint">
-    <kbd>Enter</kbd> next note · <kbd>↑</kbd><kbd>↓</kbd> pitch (<kbd>Shift</kbd> = octave) · <kbd>A</kbd>–<kbd>G</kbd> note name ·
-    <kbd>Shift</kbd>+<kbd>A</kbd>–<kbd>G</kbd> add a chord note · <kbd>Tab</kbd> next note in chord ·
-    <kbd>←</kbd><kbd>→</kbd> move (<kbd>Shift</kbd> = select) · <kbd>1</kbd><kbd>2</kbd><kbd>4</kbd><kbd>8</kbd><kbd>6</kbd> length ·
-    <kbd>.</kbd> dot · <kbd>3</kbd> triplet · <kbd>R</kbd> rest · <kbd>T</kbd> tie · <kbd>S</kbd> slur ·
-    <kbd>#</kbd> sharp · <kbd>-</kbd> flat · <kbd>N</kbd> natural · <kbd>L</kbd> lyric · <kbd>H</kbd> chord symbol ·
-    <kbd>[</kbd><kbd>]</kbd> transpose · <kbd>Ctrl/Cmd</kbd>+<kbd>C</kbd><kbd>X</kbd><kbd>V</kbd><kbd>A</kbd> copy, cut, paste, select all ·
-    <kbd>Backspace</kbd> delete · <kbd>Space</kbd> play
-  </p>
+  <details class="hint" open>
+    <summary>Keyboard shortcuts</summary>
+    <div class="keys">
+      <section><h4>Write</h4>
+        <p><kbd>Enter</kbd> Add the next note</p>
+        <p><kbd>A</kbd>–<kbd>G</kbd> Set the note by name</p>
+        <p><kbd>↑</kbd> <kbd>↓</kbd> Move the note up or down a step</p>
+        <p><kbd>Shift</kbd>+<kbd>↑</kbd> <kbd>↓</kbd> Move it an octave</p>
+        <p><kbd>Backspace</kbd> Delete</p>
+      </section>
+      <section><h4>Length</h4>
+        <p><kbd>1</kbd> Whole &nbsp;<kbd>2</kbd> Half &nbsp;<kbd>4</kbd> Quarter</p>
+        <p><kbd>8</kbd> Eighth &nbsp;<kbd>6</kbd> Sixteenth</p>
+        <p><kbd>.</kbd> Dotted &nbsp;<kbd>3</kbd> Triplet</p>
+        <p><kbd>R</kbd> Rest</p>
+      </section>
+      <section><h4>Pitch and joins</h4>
+        <p><kbd>#</kbd> Sharp &nbsp;<kbd>-</kbd> Flat &nbsp;<kbd>N</kbd> Natural</p>
+        <p><kbd>T</kbd> Tie to the next note</p>
+        <p><kbd>S</kbd> Slur to the next note</p>
+        <p><kbd>[</kbd> <kbd>]</kbd> Transpose down or up</p>
+      </section>
+      <section><h4>Chords and words</h4>
+        <p><kbd>Shift</kbd>+<kbd>A</kbd>–<kbd>G</kbd> Stack another note</p>
+        <p><kbd>Tab</kbd> Next note in the stack</p>
+        <p><kbd>L</kbd> Lyric &nbsp;<kbd>H</kbd> Chord symbol</p>
+      </section>
+      <section><h4>Move and select</h4>
+        <p><kbd>←</kbd> <kbd>→</kbd> Previous or next note</p>
+        <p><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> Select several</p>
+        <p><kbd>Ctrl/Cmd</kbd>+<kbd>A</kbd> Select all</p>
+        <p><kbd>Ctrl/Cmd</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd> Copy, cut, paste</p>
+      </section>
+      <section><h4>Play and undo</h4>
+        <p><kbd>Space</kbd> Play or stop</p>
+        <p><kbd>Ctrl/Cmd</kbd>+<kbd>Z</kbd> Undo</p>
+      </section>
+    </div>
+  </details>
 </main>
 <div id="printall"></div>
 <div class="pad">
@@ -735,7 +780,10 @@ $('file').onchange = async e => {
 };
 for (const k in KEYS) $('key').add(new Option(k));
 for (const t of TIMES) $('time').add(new Option(t));
-for (const id of ['dyn', 'art']) for (const v of ['', ...Object.keys(id === 'dyn' ? DYN : ARTS)]) $(id).add(new Option(v || '—', v));
+const LABEL = { pp: 'pp · very soft', p: 'p · soft', mp: 'mp · fairly soft', mf: 'mf · fairly loud', f: 'f · loud', ff: 'ff · very loud',
+  staccato: 'Staccato · short', accent: 'Accent · stressed', tenuto: 'Tenuto · held', marcato: 'Marcato · strong accent', fermata: 'Fermata · pause' };
+$('dyn').add(new Option('Dynamic: none', '')); $('art').add(new Option('Articulation: none', ''));
+for (const id of ['dyn', 'art']) for (const v of Object.keys(id === 'dyn' ? DYN : ARTS)) $(id).add(new Option(LABEL[v], v));
 FIELDS.forEach(id => {
   const el = $(id);
   el.oninput = () => { doc[id] = id === 'tempo' ? Math.max(30, Math.min(300, +el.value || 100)) : el.value; commit(); };
